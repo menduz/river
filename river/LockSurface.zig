@@ -21,6 +21,10 @@ tree: *wlr.SceneTree,
 
 idle_update_focus: ?*wl.EventSource = null,
 
+/// The size sent in the latest configure event.
+configured_width: i32 = 0,
+configured_height: i32 = 0,
+
 map: wl.Listener(void) = .init(handleMap),
 surface_destroy: wl.Listener(void) = .init(handleDestroy),
 
@@ -81,10 +85,16 @@ pub fn getOutput(lock_surface: *LockSurface) *Output {
     return @ptrCast(@alignCast(lock_surface.wlr_lock_surface.output.data));
 }
 
+/// Send the size of the output to the client if it differs from the size
+/// sent in the latest configure event.
 pub fn configure(lock_surface: *LockSurface) void {
     var output_width: i32 = undefined;
     var output_height: i32 = undefined;
     lock_surface.wlr_lock_surface.output.effectiveResolution(&output_width, &output_height);
+    if (output_width == lock_surface.configured_width and
+        output_height == lock_surface.configured_height) return;
+    lock_surface.configured_width = output_width;
+    lock_surface.configured_height = output_height;
     _ = lock_surface.wlr_lock_surface.configure(@intCast(output_width), @intCast(output_height));
 }
 

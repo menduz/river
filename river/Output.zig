@@ -180,6 +180,7 @@ destroy: wl.Listener(*wlr.Output) = .init(handleDestroy),
 request_state: wl.Listener(*wlr.Output.event.RequestState) = .init(handleRequestState),
 frame: wl.Listener(*wlr.Output) = .init(handleFrame),
 present: wl.Listener(*wlr.Output.event.Present) = .init(handlePresent),
+commit: wl.Listener(*wlr.Output.event.Commit) = .init(handleCommit),
 
 pub fn create(wlr_output: *wlr.Output) !void {
     const output = try util.gpa.create(Output);
@@ -239,6 +240,7 @@ pub fn create(wlr_output: *wlr.Output) !void {
     wlr_output.events.request_state.add(&output.request_state);
     wlr_output.events.frame.add(&output.frame);
     wlr_output.events.present.add(&output.present);
+    wlr_output.events.commit.add(&output.commit);
 
     output.scheduled.state = .enabled;
     if (wlr_output.preferredMode()) |preferred_mode| {
@@ -302,6 +304,7 @@ fn handleDestroy(listener: *wl.Listener(*wlr.Output), wlr_output: *wlr.Output) v
     output.request_state.link.remove();
     output.frame.link.remove();
     output.present.link.remove();
+    output.commit.link.remove();
 
     wlr_output.data = null;
 
@@ -551,6 +554,20 @@ fn renderAndCommit(output: *Output) !void {
                 }
             }
         },
+    }
+}
+
+/// A new mode, scale or transform may change the size of the output. The
+/// ext-session-lock-v1 protocol requires a new configure event for the lock
+/// surface in that case, else the lock surface keeps the old size.
+fn handleCommit(listener: *wl.Listener(*wlr.Output.event.Commit), event: *wlr.Output.event.Commit) void {
+    const output: *Output = @fieldParentPtr("commit", listener);
+
+    const committed = event.state.committed;
+    if (!committed.mode and !committed.scale and !committed.transform) return;
+
+    if (server.lock_manager.lockSurfaceFromOutput(output)) |lock_surface| {
+        lock_surface.configure();
     }
 }
 
