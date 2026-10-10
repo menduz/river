@@ -78,8 +78,12 @@ pub fn create(xsurface: *wlr.XwaylandSurface) error{OutOfMemory}!void {
     xsurface.events.request_minimize.add(&xwindow.request_minimize);
 
     if (xsurface.surface) |surface| {
+        // handleAssociate() can map the surface. Then the map listener calls
+        // handleMap(). Call handleMap() here only if the surface was mapped
+        // before handleAssociate().
+        const mapped = surface.mapped;
         handleAssociate(&xwindow.associate);
-        if (surface.mapped) {
+        if (mapped) {
             handleMap(&xwindow.map);
         }
     }
@@ -171,9 +175,54 @@ fn handleDestroy(listener: *wl.Listener(void)) void {
 
 fn handleAssociate(listener: *wl.Listener(void)) void {
     const xwindow: *XwaylandWindow = @fieldParentPtr("associate", listener);
+    const surface = xwindow.xsurface.surface.?;
 
-    xwindow.xsurface.surface.?.events.map.add(&xwindow.map);
-    xwindow.xsurface.surface.?.events.unmap.add(&xwindow.unmap);
+    surface.events.map.add(&xwindow.map);
+    surface.events.unmap.add(&xwindow.unmap);
+
+    mapIfCommitted(surface);
+}
+
+/// Maps an Xwayland surface that got its first buffer before the association.
+///
+/// The race (Xwayland 24.1.13, wlroots 0.20.0):
+///   1. Xwayland sends the association serial two times. Refer to
+///      send_surface_id_event_serial() in hw/xwayland/xwayland-window.c:
+///      - in the X11 client message WL_SURFACE_SERIAL, to the xwm. Xwayland
+///        sends this message at its next X11 flush.
+///      - with xwayland_surface_v1.set_serial on the Wayland connection.
+///        Xwayland flushes this request immediately.
+///   2. river can read the Wayland request first. Then the xwm does not know
+///      the serial yet, and the wlr_surface stays unpaired. Refer to
+///      handle_shell_v1_new_surface() in xwayland/xwm.c.
+///   3. Xwayland attaches the first buffer and commits it. wlroots does not
+///      map the surface, because the surface is not associated.
+///   4. The xwm reads the client message and associates the surface. wlroots
+///      maps the surface only on a commit after the association. Refer to
+///      xwayland_surface_handle_commit() in xwayland/xwm.c.
+///   5. Xwayland does not commit a window again before the frame callback of
+///      the last commit. Refer to xwl_screen_post_damage() in
+///      hw/xwayland/xwayland-screen.c.
+///   6. river sends frame callbacks only to surfaces in its scene graph. An
+///      unmapped surface is not in the scene graph.
+/// Thus the surface never maps, and the window manager never gets the
+/// window. If the window is a modal dialog, its parent ignores all input.
+///
+/// Signs of the race, for a window that does not show:
+///   - `xwininfo -id <window>` shows "IsViewable". `xprop` shows WM_STATE
+///     Normal, but no _NET_WM_STATE_FOCUSED.
+///   - `river -log-level debug` shows "New xwayland surface" for the
+///     surface, but no "window '...' mapped" after it.
+///   - `xdotool windowunmap --sync <window>` and then `xdotool windowmap`
+///     make the window show.
+///
+/// Seen with the GTK2 file dialog of Strawberry (Qt with
+/// QT_QPA_PLATFORMTHEME=gtk2). The race occurred only when other windows
+/// were on the same output. It did not occur in a headless river.
+pub fn mapIfCommitted(surface: *wlr.Surface) void {
+    if (!surface.mapped and surface.hasBuffer()) {
+        surface.map();
+    }
 }
 
 fn handleDissociate(listener: *wl.Listener(void)) void {

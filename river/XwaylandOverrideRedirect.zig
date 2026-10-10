@@ -54,8 +54,10 @@ pub fn create(xsurface: *wlr.XwaylandSurface) error{OutOfMemory}!void {
     xsurface.events.dissociate.add(&override_redirect.dissociate);
 
     if (xsurface.surface) |surface| {
+        // Refer to XwaylandWindow.create().
+        const mapped = surface.mapped;
         handleAssociate(&override_redirect.associate);
-        if (surface.mapped) {
+        if (mapped) {
             handleMap(&override_redirect.map);
         }
     }
@@ -85,6 +87,9 @@ fn handleAssociate(listener: *wl.Listener(void)) void {
 
     override_redirect.xsurface.surface.?.events.map.add(&override_redirect.map);
     override_redirect.xsurface.surface.?.events.unmap.add(&override_redirect.unmap);
+
+    // Refer to XwaylandWindow.mapIfCommitted().
+    XwaylandWindow.mapIfCommitted(override_redirect.xsurface.surface.?);
 }
 
 fn handleDissociate(listener: *wl.Listener(void)) void {
