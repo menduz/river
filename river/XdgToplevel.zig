@@ -124,21 +124,22 @@ pub fn configure(toplevel: *XdgToplevel) bool {
     const sent = &toplevel.window.configure_sent;
 
     if (!toplevel.needsConfigure()) {
-        // If no new configure is required, continue to track a timed out configure
-        // from the previous transaction if any.
+        // If no new configure is required, do not track a timed out configure
+        // again. The transaction that timed out already rendered without it,
+        // and a client that does not commit would make each later
+        // transaction wait for the timeout.
         switch (toplevel.configure_state) {
             .idle => return false,
-            .timed_out => |serial| {
-                toplevel.configure_state = .{ .inflight = serial };
-                return true;
-            },
-            .timed_out_acked => {
-                toplevel.configure_state = .acked;
-                return true;
+            .timed_out, .timed_out_acked => {
+                toplevel.configure_state = .idle;
+                return false;
             },
             .inflight, .acked, .committed => unreachable,
         }
     }
+
+    const previous_width = toplevel.window.configure_sent.width;
+    const previous_height = toplevel.window.configure_sent.height;
 
     const wlr_toplevel = toplevel.wlr_toplevel;
 
@@ -185,14 +186,15 @@ pub fn configure(toplevel: *XdgToplevel) bool {
     toplevel.window.configure_scheduled.width = null;
     toplevel.window.configure_scheduled.height = null;
 
-    // Generally, only track configures (and save surfaces) if there is a
-    // change in size involved. If the configure state is not idle, we are
-    // currently tracking a timed out configure and should instead track the
-    // new one even if there is no change in size involved.
+    // Only track configures (and save surfaces) if the size differs from the
+    // size of the last configure. A configure that changes only a state, for
+    // example the activated state at a focus change, does not wait for the
+    // client, also when the client keeps a size of its own. A timed out
+    // configure is not tracked any more.
     if (width != 0 and height != 0 and
-        width == toplevel.geometry.width and height == toplevel.geometry.height and
-        toplevel.configure_state == .idle)
+        previous_width == width and previous_height == height)
     {
+        toplevel.configure_state = .idle;
         return false;
     }
 
